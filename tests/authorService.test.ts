@@ -1,82 +1,104 @@
-import request from 'supertest';
-import app from '../server';
-import Author from '../models/author';
+import app from "../server";
+import request from "supertest";
+import Book from "../models/book";
+import mongoose from "mongoose";
+import BookInstance from "../models/bookinstance";
 
-describe('GET /authors', () => {
-  afterEach(() => {
-    jest.clearAllMocks();
-  });
+describe("Verify GET /book_dtls/:id", () => {
+    const mockBookId = new mongoose.Types.ObjectId().toHexString();
 
-  it('should return a sorted list of authors (by family name) with their lifetimes when authors exist', async () => {
-    const authorsData = [
-      {
-        first_name: 'John',
-        family_name: 'Doe',
-        date_of_birth: new Date('1989-01-09'),
-        date_of_death: new Date('2018-01-01'),
-      },
-      {
-        first_name: 'Alice',
-        family_name: 'Brown',
-        date_of_birth: new Date('1980-05-05'),
-        date_of_death: new Date('2020-05-05'),
-      },
-      {
-        first_name: 'Bob',
-        family_name: 'Clark',
-        date_of_birth: new Date('1975-03-03'),
-        date_of_death: new Date('2015-03-03'),
-      }
-    ];
-    const authorsInstances = authorsData.map(data => new Author(data));
+    let consoleSpy: jest.SpyInstance;
 
-    // Sort the instances by family name (ascending)
-    const sortedAuthorsInstances = [...authorsInstances].sort((a, b) =>
-      a.family_name.localeCompare(b.family_name)
-    );
-
-    // The service returns each author as a string: "name : lifespan"
-    const expectedSorted = sortedAuthorsInstances.map(
-      author => `${author.name} : ${author.lifespan}`
-    );
-
-    // Mock Author.find() to return a query-like object with a sort() method.
-    jest.spyOn(Author, 'find').mockImplementation(() => {
-      return {
-        sort: jest.fn().mockResolvedValue(sortedAuthorsInstances)
-      } as any;
+    beforeAll(() => {
+        consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     });
 
-    const response = await request(app).get('/authors');
+    afterAll(() => {
+        consoleSpy.mockRestore();
+    });
+    
+    it("should respond with book title, author name, and book instances with imprint and status", async () => {
+        const mockBook = {
+            title: "Test Book",
+            author: { name: "Test Author" },
+            copies: [{
+                imprint: "Test Imprint",
+                status: "Available"
+            },
+            {
+                imprint: "Test Imprint 2",
+                status: "Loaned"
+            }]    
+        }
+        const expectedResponse = { ...mockBook, author: mockBook.author.name };
+        Book.getBook = jest.fn().mockImplementationOnce((id) => {
+            if (id === mockBookId) {
+                return Promise.resolve({
+                    title: mockBook.title,
+                    author: mockBook.author
+                });
+            }
+            return Promise.resolve(null);
+        });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual(expectedSorted);
-  });
+        BookInstance.getBookDetails = jest.fn().mockImplementationOnce((id) => {
+            if (id === mockBookId) {
+                return Promise.resolve(mockBook.copies);
+            }
+            return Promise.resolve([]);
+        });
 
-  it('should respond with "No authors found" when the database returns an empty list', async () => {
-    jest.spyOn(Author, 'find').mockImplementation(() => {
-      return {
-        sort: jest.fn().mockResolvedValue([])
-      } as any;
+        const response = await request(app).get(`/book_dtls?id=${mockBookId}`);
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toStrictEqual(expectedResponse);
     });
 
-    const response = await request(app).get('/authors');
-
-    expect(response.statusCode).toBe(200);
-    expect(response.text).toBe("No authors found");
-  });
-
-  it('should respond with "No authors found" when there is an error retrieving authors', async () => {
-    jest.spyOn(Author, 'find').mockImplementation(() => {
-      return {
-        sort: jest.fn().mockRejectedValue(new Error("DB Error"))
-      } as any;
+    it("should respond with 404 if the book is not found", async () => {
+        Book.getBook = jest.fn().mockResolvedValue(null);
+        BookInstance.getBookDetails = jest.fn().mockResolvedValue([]);
+        const response = await request(app).get(`/book_dtls?id=${mockBookId}`);
+        expect(response.statusCode).toBe(404);
+        expect(response.text).toBe(`Book ${mockBookId} not found`);
     });
 
-    const response = await request(app).get('/authors');
+    it("should respond with 404 if book id is empty", async () => {  
+        Book.getBook = jest.fn().mockImplementationOnce((id) => {
+            if (id.length === 0) {
+                return Promise.resolve(null);
+            }
+            return Promise.resolve({});
+        });
+        BookInstance.getBookDetails = jest.fn().mockResolvedValue([]);
+        const response = await request(app).get("/book_dtls?id=");
+        expect(response.statusCode).toBe(404);
+        expect(response.text).toBe("Book  not found");
+    });
 
-    // res.send('No authors found')
-    expect(response.statusCode).toBe(200);
-    expect(response.text).toBe("No authors found");
-  });
+
+    it("should respond with 500 if there is an error fetching the book", async () => {
+        Book.getBook = jest.fn().mockRejectedValue(new Error("Database error"));
+        BookInstance.getBookDetails = jest.fn().mockResolvedValue([]);
+        const response = await request(app).get(`/book_dtls?id=${mockBookId}`);
+        expect(response.statusCode).toBe(500);
+        expect(response.text).toBe(`Error fetching book ${mockBookId}`);
+        expect(consoleSpy).toHaveBeenCalled();
+    });
+
+    it("should respond with 500 if there is an error fetching the book instances", async () => {
+        Book.getBook = jest.fn().mockResolvedValue({});
+        BookInstance.getBookDetails = jest.fn().mockRejectedValue(new Error("Database error"));
+        const response = await request(app).get(`/book_dtls?id=${mockBookId}`);
+        expect(response.statusCode).toBe(500);
+        expect(response.text).toBe(`Error fetching book ${mockBookId}`);
+        expect(consoleSpy).toHaveBeenCalled();  
+    });
+
+    it("should respond with 500 if there is an error fetching the book and book instances", async () => {
+        Book.getBook = jest.fn().mockRejectedValue(new Error("Database error"));
+        BookInstance.getBookDetails = jest.fn().mockRejectedValue(new Error("Database error"));
+        const response = await request(app).get(`/book_dtls?id=${mockBookId}`);
+        expect(response.statusCode).toBe(500);
+        expect(response.text).toBe(`Error fetching book ${mockBookId}`);
+        expect(consoleSpy).toHaveBeenCalled();  
+    });
 });
