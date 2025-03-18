@@ -53,7 +53,7 @@ should be placed in `tests/authorService.test.ts`.
 
 Briefly explain a limitation of the tests in `tests/authorSchema.test.ts` in the space below.
 
-
+One limitation is that the tests use syncrhonous validation (validateSync()) so this bypasses any asynchronous validaors in my schema. They check for validations errors but it doesn't verify the exact error messages or types. They means that this approach may overlook some potential asynchronous validation issues or differences in the error details.
 
 ## Part 3
 
